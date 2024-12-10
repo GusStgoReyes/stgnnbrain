@@ -1,0 +1,5 @@
+*.txt filter=lfs diff=lfs merge=lfs -text
+data/connectivity_aa116 filter=lfs diff=lfs merge=lfs -text
+data/labels.csv filter=lfs diff=lfs merge=lfs -text
+data/parcel_data.txt filter=lfs diff=lfs merge=lfs -text
+data/timeseries_aa116 filter=lfs diff=lfs merge=lfs -text

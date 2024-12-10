@@ -1,0 +1,15 @@
+[project]
+name = "stgnnbrain"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jupyter>=1.1.1",
+    "matplotlib>=3.9.2",
+    "nilearn>=0.10.4",
+    "numpy>=2.1.2",
+    "pandas>=2.2.3",
+    "scipy>=1.14.1",
+    "seaborn>=0.13.2",
+]
