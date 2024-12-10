@@ -101,11 +101,14 @@ class ConnectomeDataset(Dataset):
 
       return data
   
-def train(model_name, model, train_loader, criterion, optimizer, num_epochs=100):
+def train(model_name, model, train_loader, criterion, optimizer, num_epochs=100, min_delta = 0.001, patience = 10):
+    best_train_loss = float('inf')
+    patience_counter = 0
+
     for epoch in range(num_epochs):
         model.train()
         train_losses = []
-
+        
         for batch in train_loader:
             optimizer.zero_grad()
             # Move batch to the device
@@ -114,10 +117,8 @@ def train(model_name, model, train_loader, criterion, optimizer, num_epochs=100)
             # Forward pass
             if model_name == 'Baseline LSTM':
               output = model(batch.x)
-            elif model_name == 'MLP':
-              output = model(batch.x, batch.edge_index, batch.edge_attr)
             else:
-              output = model(batch.x, batch.edge_index)
+              output = model(batch.x, batch.edge_index, batch.edge_attr)
 
             # Compute loss
             loss = criterion(output, batch.y)
@@ -126,14 +127,22 @@ def train(model_name, model, train_loader, criterion, optimizer, num_epochs=100)
             train_losses.append(loss.item())
 
         avg_train_loss = np.mean(train_losses)
+
+        # Early stopping check
+        if avg_train_loss < best_train_loss - min_delta:
+            best_train_loss = avg_train_loss
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print('Early stopping...')
+                break
+
         print(f'Epoch {epoch + 1}/{num_epochs}, Training Loss: {round(avg_train_loss, 3)}')
 
     return avg_train_loss
 
 def evaluate(model_name, model, val_loader, criterion):
-    best_val_loss = float('inf')
-    patience_counter = 0
-
     # Switch model to evaluation mode
     model.eval()
 
@@ -150,10 +159,9 @@ def evaluate(model_name, model, val_loader, criterion):
             # Forward pass
             if model_name == 'Baseline LSTM':
               output = model(batch.x)
-            elif model_name == 'MLP':
-              output = model(batch.x, batch.edge_index, batch.edge_attr)
             else:
-              output = model(batch.x, batch.edge_index, batch.batch)
+              output = model(batch.x, batch.edge_index, batch.edge_attr)
+
             val_loss = criterion(output, batch.y)
             val_losses.append(val_loss.item())
 
@@ -218,15 +226,20 @@ def main():
     dataset = ConnectomeDataset(connectivity_matrices, timeseries_matrices, labels)
 
     # Initialize models
-    in_channels = connectivity_matrices[subject_ids[0]].shape[1]
+    num_nodes = connectivity_matrices[subject_ids[0]].shape[1]
+    num_timepoints = timeseries_matrices[subject_ids[0]].shape[0]
     hidden_channels = 64
+    hidden_channels_time = 8
     out_channels = 2  # binary classification
+    window_size = 16
+    stride = 3
     
     models = {
-        # 'Baseline LSTM': SimpleTimeSeriesLSTM(in_channels, hidden_channels, out_channels),
-        # 'MLP': MLP(in_channels, [hidden_channels], out_channels),
-        'STGCN': STGCN(in_channels, hidden_channels, out_channels),
-        # 'STChebNet': STChebNet(in_channels, hidden_channels, out_channels),
+        # 'GCNCNN': GCNCNN(num_nodes, hidden_channels, out_channels, num_timepoints = num_timepoints, window_size=window_size, stride = stride),
+        # 'StaticGCN' : StaticGCN(hidden_channels, hidden_channels, out_channels, num_nodes = num_nodes)
+        # 'LSTM': SimpleTimeSeriesLSTM(num_nodes, hidden_channels, out_channels),
+        # 'MLP': MLP(num_nodes, [hidden_channels], out_channels),
+        # 'STGCN': STGCN(hidden_channels_time, out_channels),
     }
 
     # Create dictionary to store results
@@ -235,7 +248,8 @@ def main():
     # Define early stopping parameters
     patience = 10
     min_delta = 0.001
-    n_splits = 4
+    n_splits = 5
+    num_epochs = 100
 
     skf = StratifiedKFold(n_splits = n_splits, shuffle = True, random_state = seed)
 
@@ -261,14 +275,24 @@ def main():
 
             # Reset model for each fold
             if model_name == 'MLP':
-                model = models[model_name].__class__(in_channels, [hidden_channels], out_channels)
+                model = models[model_name].__class__(num_nodes, [hidden_channels], out_channels)
+            elif model_name == 'LSTM': 
+                model = models[model_name].__class__(num_nodes, hidden_channels, out_channels)
+            elif model_name == 'STGCN':
+                model = models[model_name].__class__(hidden_channels_time, out_channels)
+            elif model_name == 'GCNCNN':
+                model = models[model_name].__class__(num_nodes, hidden_channels, out_channels, num_timepoints = num_timepoints, window_size=window_size, stride = stride)
+            elif model_name == 'StaticGCN':
+                model = models[model_name].__class__(hidden_channels, hidden_channels, out_channels, num_nodes = num_nodes)
             else:
-                model = models[model_name].__class__(in_channels, hidden_channels, out_channels)
+                model = models[model_name].__class__(num_nodes, hidden_channels, out_channels)
+            
             optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
             criterion = nn.CrossEntropyLoss()
 
             # Train model
-            train_loss = train(model_name, model, train_loader, criterion, optimizer, num_epochs=30)
+            train_loss = train(model_name, model, train_loader, criterion, optimizer, 
+                            num_epochs=num_epochs, min_delta = min_delta, patience = patience)
 
             # Evaluate model
             val_loss, metrics = evaluate(model_name, model, val_loader, criterion)
