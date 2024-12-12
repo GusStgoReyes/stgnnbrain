@@ -1,214 +1,400 @@
 import torch
-from torch_geometric.nn import GCNConv, ChebConv, GATConv, SGConv
-import numpy as np
-import os
+from torch_geometric.nn import GCNConv, GATConv
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import global_mean_pool
 
-class SimpleTimeSeriesLSTM(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size, num_layers=1):
-        super(SimpleTimeSeriesLSTM, self).__init__()
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers=num_layers, batch_first=True)
-        self.linear = nn.Linear(hidden_size, output_size)
-
-    def forward(self, x):
-        """
-        x: Tensor of shape (batch_size, seq_len, input_size)
-        """
-        lstm_out, _ = self.lstm(x.unsqueeze(0))  # Output for all time steps
-        final_out = lstm_out[:, -1, :]  # Use the last time step's output
-        return self.linear(final_out)  # Map to output size
-    
+#############BASELINE MODELS################
 class MLP(nn.Module):
     def __init__(self, input_size, hidden_sizes, output_size):
         super(MLP, self).__init__()
-        
-        # Define hidden layers
+
+        # Define the input size
         self.input_size = input_size
+
+        # Define hidden layers
         self.hidden_layers = nn.ModuleList()
-        in_features = input_size*input_size
+        in_features = input_size * input_size
         for hidden_size in hidden_sizes:
             self.hidden_layers.append(nn.Linear(in_features, hidden_size))
             in_features = hidden_size
-        
+
         # Define the output layer
         self.output_layer = nn.Linear(in_features, output_size)
-        
-    def forward(self, x, edge_index, edge_attr):
-        """
-        Forward pass of the MLP model.
-        
-        Args:
-            x (tensor): Input tensor.
-            
-        Returns:
-            tensor: Output predictions.
-        """
-        matrix = torch.zeros(self.input_size, self.input_size)
-        matrix[edge_index[0], edge_index[1]] = edge_attr[:, 0]
 
-        x = matrix.flatten()
+    def forward(self, node_features, edge_index, edge_attributes):
+        """
+        Forward pass for the MLP model.
+
+        Inputs:
+          node_features (Tensor): Node features.
+          edge_index (Tensor): Edge indices.
+          edge_attributes (Tensor): Edge attributes.
+
+        Outputs:
+          output (Tensor): Output of the MLP model.
+        """
+        device = node_features.device
+
+        # Initialize an adjacency matrix with zeros
+        adjacency_matrix = torch.zeros(self.input_size, self.input_size).to(device)
+        # Fill the adjacency matrix with edge attributes
+        adjacency_matrix[edge_index[0], edge_index[1]] = edge_attributes[:, 0]
+
+        # Flatten the adjacency matrix
+        x = adjacency_matrix.flatten()
+
+        # Pass through hidden layers
         for layer in self.hidden_layers:
             x = F.relu(layer(x))  # Apply ReLU activation after each hidden layer
-        return self.output_layer(x).unsqueeze(0)  # No activation on the final layer (for raw output)
 
-class StaticGCN(torch.nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, num_nodes = 116):
-        super().__init__()
-        self.in_channels = in_channels
-        self.num_nodes = num_nodes
-        self.conv1 = GCNConv(in_channels, hidden_channels)
-        self.conv2 = GCNConv(hidden_channels, out_channels)
+        # Pass through the output layer and unsqueeze the output
+        output = self.output_layer(x).unsqueeze(0)  # No activation on the final layer (for raw output)
 
-    def forward(self, x, edge_index, edge_attr):
-        x = torch.ones((self.num_nodes, self.in_channels))
-        x = self.conv1(x, edge_index, edge_weight=edge_attr)
-        x = F.relu(x)
-        x = self.conv2(x, edge_index, edge_weight=edge_attr)
-        x = global_mean_pool(x, None)
+        return output
+
+class SimpleLSTM(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(SimpleLSTM, self).__init__()
+
+        # Define the LSTM layer
+        self.lstm = nn.LSTM(input_size, hidden_size, batch_first=True)
+        # Define the output layer
+        self.output_layer = nn.Linear(hidden_size, output_size)
+
+    def forward(self, node_features, edge_index, edge_attributes):
+        """
+        Forward pass for the SimpleLSTM model.
+
+        Inputs:
+          node_features (Tensor): Time series data of shape (input_size, seq_len).
+          edge_index (Tensor): Edge indices.
+          edge_attributes (Tensor): Edge attributes.
+
+        Outputs:
+          output (Tensor): Output of the SimpleLSTM model.
+        """
+        x = node_features.T
+        # Pass the time series data through the LSTM layer
+        x, _ = self.lstm(x.unsqueeze(0))  # Output for all time steps
+
+        # Use the last time step's output
+        x = x[:, -1, :]
+        x = F.relu(x)  # Apply ReLU activation
+
+        # Pass through the output layer
+        x = self.output_layer(x)
+
         return x
     
-class STGCN(nn.Module):
-    def __init__(self, hidden_channels, out_channels):
-        super(STGCN, self).__init__()
-        self.hidden_channels = hidden_channels
+class StaticGCN(nn.Module):
+    def __init__(self, input_channels, hidden_channels, output_channels, num_nodes=116):
+        super(StaticGCN, self).__init__()
 
-        # Define an LSTM for each feature
-        self.lstm_layer = nn.LSTM(1, hidden_channels, batch_first=True)
+        # Define the input channels and number of nodes
+        self.input_channels = input_channels
+        self.num_nodes = num_nodes
 
-        # Graph Convolution layer
-        self.conv1 = GCNConv(hidden_channels, out_channels)
+        # Define the first GCN layer
+        self.conv1 = GCNConv(input_channels, hidden_channels)
+        # Define the second GCN layer
+        self.conv2 = GCNConv(hidden_channels, output_channels)
 
-    def forward(self, x, edge_index, edge_attr):
+    def forward(self, node_features, edge_index, edge_attributes):
         """
-        x: Input feature matrix of shape [timepoints, num_features]
-        edge_index: Edge indices for graph structure
-        edge_attr: Edge weights
+        Forward pass for the StaticGCN model.
+
+        Inputs:
+          node_features (Tensor): Node features.
+          edge_index (Tensor): Edge indices.
+          edge_attributes (Tensor): Edge attributes.
+
+        Outputs:
+          output (Tensor): Output of the StaticGCN model.
         """
-        # Reshape input for batched LSTM processing
-        x = x.transpose(0, 1).unsqueeze(-1)
+        device = node_features.device
 
-        # Pass all features through the LSTM in a single batch
-        lstm_out, _ = self.lstm_layer(x) 
+        # Initialize node features with ones
+        x = torch.ones((self.num_nodes, self.input_channels)).to(device)
 
-        # Extract the last hidden state for each feature
-        lstm_output_matrix = lstm_out[:, -1, :]
+        # Apply the first GCN layer with edge attributes
+        x = self.conv1(x, edge_index, edge_weight=edge_attributes)
+        x = F.relu(x) 
 
-        # Apply GCN on the output of LSTMs
-        gcn_output = self.conv1(lstm_output_matrix, edge_index, edge_weight=edge_attr)
+        # Apply the second GCN layer with edge attributes
+        x = self.conv2(x, edge_index, edge_weight=edge_attributes)
 
-        # Global mean
-        gcn_output = global_mean_pool(gcn_output, None)
+        # Apply global mean pooling
+        output = global_mean_pool(x, None)
 
-        return gcn_output
+        return output
 
-class STChebNet(nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, K=3):
-        super(STChebNet, self).__init__()
-        self.in_channels = in_channels
-        self.conv1 = ChebConv(self.in_channels, hidden_channels, K)
-        self.conv2 = ChebConv(hidden_channels, hidden_channels, K)
-        self.gru = nn.GRU(hidden_channels, hidden_channels, batch_first=True)
-        self.linear = nn.Linear(hidden_channels, out_channels)
+#############GRAPH 1 MODELS################
+class CNNGCN(nn.Module):
+    def __init__(self, hidden_channels, out_channels, num_timepoints = 518, window_size=32, stride = 2, dilation = 2, less_layers = False):
+        super(CNNGCN, self).__init__()
+        self.less_layers = less_layers
 
-    def forward(self, data):
-        x, edge_index, edge_attr, batch = data.x, data.edge_index, data.edge_attr, data.batch
-
-        # Apply ChebConv layers
-        x = F.relu(self.conv1(x, edge_index))
-        x = F.relu(self.conv2(x, edge_index))
-
-        # GRU for temporal modeling
-        x, _ = self.gru(x.unsqueeze(0))
-        x = x.squeeze(0)
-        # Handle the case where no batch is provided (e.g., single graph)
-        if batch is None:
-            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
-
-        # Graph pooling
-        x = global_mean_pool(x, batch)
-
-        # Final linear layer for classification
-        return self.linear(x)
-
-    def process_edge_features(self, x, edge_index, edge_attr):
-        # Example: Aggregate edge attributes to nodes
-        aggregated_edge_attr = torch.zeros_like(x, device=x.device)
-        for i in range(edge_index.size(1)):
-            source, target = edge_index[:, i]
-            aggregated_edge_attr[target] += edge_attr[i]
-
-        # Concatenate aggregated edge_attr to node features
-        return torch.cat([x, aggregated_edge_attr], dim=1)
-
-class STGAT(nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, heads=4):
-        super(STGAT, self).__init__()
-        self.conv1 = GATConv(in_channels, hidden_channels, heads)
-        self.conv2 = GATConv(hidden_channels * heads, hidden_channels, heads)
-        self.temporal_conv = nn.Conv1d(hidden_channels * heads, hidden_channels, kernel_size=3, padding=1)
-        self.linear = nn.Linear(hidden_channels, out_channels)
-
-    def forward(self, data):
-        x, edge_index = data.x, data.edge_index
-        x = F.relu(self.conv1(x, edge_index))
-        x = F.relu(self.conv2(x, edge_index))
-        x = F.relu(self.temporal_conv(x.unsqueeze(0).transpose(1, 2)))
-        return self.linear(x.squeeze(0).transpose(1, 2))
-
-class STSGConv(nn.Module):
-    def __init__(self, in_channels, hidden_channels, out_channels, K=3):
-        super(STSGConv, self).__init__()
-        self.conv1 = SGConv(in_channels, hidden_channels, K)
-        self.conv2 = SGConv(hidden_channels, hidden_channels, K)
-        self.temporal_attn = nn.MultiheadAttention(hidden_channels, num_heads=4)
-        self.linear = nn.Linear(hidden_channels, out_channels)
-
-    def forward(self, data):
-        x, edge_index = data.x, data.edge_index
-        x = F.relu(self.conv1(x, edge_index))
-        x = F.relu(self.conv2(x, edge_index))
-        x = x.unsqueeze(0)
-        x, _ = self.temporal_attn(x, x, x)
-        return self.linear(x.squeeze(0))
-    
-class GCNCNN(nn.Module):
-    def __init__(self, num_nodes, hidden_channels, out_channels, num_timepoints = 518, window_size=32, stride = 3):
-        super(GCNCNN, self).__init__()
-        
         # 1D Convolution to process time series data for each node
         self.conv1d_1 = nn.Conv1d(
-                                in_channels=num_nodes,  # Number of time series (one per node)
-                                out_channels=num_nodes,  # Maintain one series per node
-                                kernel_size=window_size,  # Window size for the moving average
+                                in_channels=1,  # Input features per time point
+                                out_channels=1,  # Output features per time point
+                                kernel_size=window_size,
                                 stride = stride,
-                                groups=num_nodes  # Separate filters for each node
+                                dilation = dilation,
                             )
-        
-        # Hard coded, change, compute out dimension after first conv1d on time
-        l_out = np.floor((num_timepoints - window_size)/stride + 1)
-        in_channels = int(l_out)
+        self.conv1d_2 = nn.Conv1d(
+                                in_channels=1, # Input features per time point
+                                out_channels=1, # Output features per time point
+                                kernel_size=window_size,
+                                stride = stride,
+                                dilation = dilation,
+                            )
 
-        # One GCNConv layers
-        self.gcn1 = GCNConv(in_channels, hidden_channels)
-        
-    def forward(self, x, edge_index, edge_attr):
+        # Compute the output dimension of the Conv1d layers
+        conv_output_dim = (num_timepoints - (window_size - 1) * dilation - 1) // stride + 1
+        conv_output_dim = (conv_output_dim - (window_size - 1) * dilation - 1) // stride + 1
+        in_channels = int(conv_output_dim)
+
+        # Graph Convolution layer
+        if self.less_layers:
+            self.conv1 = GCNConv(in_channels, out_channels)
+        else:
+            self.conv1 = GCNConv(in_channels, hidden_channels)
+            self.conv2 = GCNConv(hidden_channels, out_channels)
+
+    def forward(self, node_features, edge_index, edge_attributes):
         """
-        Args:
-            x: Input tensor of shape (time_points, num_nodes).
-            edge_index: Edge list of shape (2, num_edges).
-            edge_attr: Edge weights of shape (num_edges,).
+        Forward pass for the CNNGCN model.
+
+        Inputs:
+          node_features (Tensor): Node features.
+          edge_index (Tensor): Edge indices.
+          edge_attributes (Tensor): Edge attributes.
+
+        Outputs:
+          output (Tensor): Output of the CNNGCN model.
         """
-        x = x.T.unsqueeze(0)  # Shape: (1, num_nodes, time_points)
+        x = node_features.unsqueeze(1)  # Shape: (num_nodes, 1, time_points)
+
+        # Apply the first 1D convolution (temporal information)
+        x = self.conv1d_1(x)
+        x = F.relu(x)
+        # Apply the second 1D convolution
+        x = self.conv1d_2(x)
+        x = F.relu(x)
+
+        # Reshape the output of the 1D convolution
+        x = x.squeeze(1)  # Shape: (num_nodes, time_points_new)
         
-        # Temporal summary
-        x = F.relu(self.conv1d_1(x))
-        x = x.squeeze(0)  # Shape: (num_nodes, time_points)
-
-        # Apply spatial information
-        x = self.gcn1(x, edge_index, edge_weight=edge_attr)
-
+        # Apply GCNConv layers (spatial information)
+        if self.less_layers:
+           x = self.conv1(x, edge_index, edge_weight=edge_attributes)
+        else:
+            x = self.conv1(x, edge_index, edge_weight=edge_attributes)
+            x = F.relu(x)
+            x = self.conv2(x, edge_index, edge_weight=edge_attributes)
+        
+        # Apply global mean pooling
         x = global_mean_pool(x, None)
-        
+
         return x
+    
+class TemporalGCN(nn.Module):
+    def __init__(self, hidden_channels, out_channels, less_layers = False, temporal_layer = 'LSTM'):
+        super(TemporalGCN, self).__init__()
+        self.less_layers = less_layers
+        self.hidden_channels = hidden_channels
+        
+        if temporal_layer == 'LSTM':
+            # LSTM layer to process time series data
+            self.temporal_layer = nn.LSTM(input_size = 1, # 1 feature per time point
+                                            hidden_size = hidden_channels, # Number of hidden units
+                                            batch_first=True)
+        elif temporal_layer == 'RNN':
+            # RNN layer to process time series data
+            self.temporal_layer = nn.RNN(input_size = 1, # 1 feature per time point
+                                            hidden_size = hidden_channels, # Number of hidden units
+                                            batch_first=True)
+
+        # Graph Convolution layer
+        if self.less_layers:
+           self.conv1 = GCNConv(hidden_channels, out_channels)
+        else:
+            self.conv1 = GCNConv(hidden_channels, hidden_channels)
+            self.conv2 = GCNConv(hidden_channels, out_channels)
+
+    def forward(self, node_features, edge_index, edge_attributes):
+        """
+        Forward pass for the TemporalGCN model.
+
+        Inputs:
+          node_features (Tensor): Node features.
+          edge_index (Tensor): Edge indices.
+          edge_attributes (Tensor): Edge attributes.
+
+        Outputs:
+          output (Tensor): Output of the TemporalGCN model.
+        """
+        # Reshape input for batched temporal processing (num_nodes x timeseries x 1)
+        x = node_features.unsqueeze(-1)
+
+        # Pass all features through the temporal layer in a single batch
+        x, _ = self.temporal_layer(x)
+
+        # Extract the last hidden state for each node
+        x = x[:, -1, :]
+        x = F.relu(x)
+
+        # Apply GCNConv layers (spatial information)
+        if self.less_layers:
+          x = self.conv1(x, edge_index, edge_weight=edge_attributes)
+        else:
+          x = self.conv1(x, edge_index, edge_weight=edge_attributes)
+          x = F.relu(x)
+          x = self.conv2(x, edge_index, edge_weight=edge_attributes)
+
+        # Global mean pooling
+        x = global_mean_pool(x, None)
+
+        return x
+ 
+class TemporalGAT(nn.Module):
+    def __init__(self, hidden_channels, out_channels, heads=3, less_layers = False, temporal_layer = 'LSTM'):
+        super(TemporalGAT, self).__init__()
+        self.less_layers = less_layers
+        self.hidden_channels = hidden_channels
+        
+        if temporal_layer == 'LSTM':
+            # LSTM layer to process time series data
+            self.temporal_layer = nn.LSTM(input_size = 1, # 1 feature per time point
+                                            hidden_size = hidden_channels, # Number of hidden units
+                                            batch_first=True)
+        elif temporal_layer == 'RNN':
+            # RNN layer to process time series data
+            self.temporal_layer = nn.RNN(input_size = 1, # 1 feature per time point
+                                            hidden_size = hidden_channels, # Number of hidden units
+                                            batch_first=True)
+
+        # Graph Convolution layer
+        if self.less_layers:
+           self.conv1 = GATConv(hidden_channels, out_channels, heads = heads)
+        else:
+            self.conv1 = GCNConv(hidden_channels, hidden_channels)
+            self.conv2 = GATConv(hidden_channels, out_channels, heads = heads)
+
+    def forward(self, node_features, edge_index, edge_attributes, return_attention_weights = False):
+        """
+        Forward pass for the TemporalGCN model.
+
+        Inputs:
+          node_features (Tensor): Node features.
+          edge_index (Tensor): Edge indices.
+          edge_attributes (Tensor): Edge attributes.
+
+        Outputs:
+          output (Tensor): Output of the TemporalGCN model.
+        """
+        # Reshape input for batched temporal processing (num_nodes x timeseries x 1)
+        x = node_features.unsqueeze(-1)
+
+        # Pass all features through the temporal layer in a single batch
+        x, _ = self.temporal_layer(x)
+
+        # Extract the last hidden state for each node
+        x = x[:, -1, :]
+        x = F.relu(x)
+
+        # Apply spatial layers (spatial information)
+        if self.less_layers:
+          x, (edges, attnt_coeff) = self.conv1(x, edge_index, return_attention_weights = True)
+        else:
+          x = self.conv1(x, edge_index, edge_weight=edge_attributes)
+          x = F.relu(x)
+          x, (edges, attnt_coeff) = self.conv2(x, edge_index, return_attention_weights = True)
+
+        # Global mean pooling
+        x = global_mean_pool(x, None)
+
+        if return_attention_weights:
+          return x, edges, attnt_coeff
+        else:
+          return x
+
+#############GRAPH 2 MODELS################
+class TimeStaticGCN(torch.nn.Module):
+    def __init__(self, input_channels, hidden_channels, output_channels):
+        super(TimeStaticGCN, self).__init__()
+
+        # Define the input channels
+        self.input_channels = input_channels
+
+        # Define the first GCN layer
+        self.conv1 = GCNConv(input_channels, hidden_channels)
+        # Define the second GCN layer
+        self.conv2 = GCNConv(hidden_channels, output_channels)
+
+    def forward(self, node_features, edge_index, edge_attributes):
+        """
+        Forward pass for the TimeStaticGCN model.
+
+        Inputs:
+          node_features (Tensor): Node features.
+          edge_index (Tensor): Edge indices.
+          edge_attributes (Tensor): Edge attributes.
+
+        Outputs:
+          output (Tensor): Output of the TimeStaticGCN model.
+        """
+        x = node_features  # (num_timepoints, num_nodes)
+        # Apply the first GCN layer with edge attributes
+        x = self.conv1(x, edge_index, edge_weight=edge_attributes)
+        x = F.relu(x)  # Apply ReLU activation
+
+        # Apply the second GCN layer with edge attributes
+        x = self.conv2(x, edge_index, edge_weight=edge_attributes)
+
+        # Apply global mean pooling
+        output = global_mean_pool(x, None)
+
+        return output
+
+class TimeStaticGCNGAT(torch.nn.Module):
+    def __init__(self, input_channels, hidden_channels, output_channels, heads = 3):
+        super(TimeStaticGCNGAT, self).__init__()
+
+        # Define the input channels
+        self.input_channels = input_channels
+
+        # Define the first GCN layer
+        self.conv1 = GCNConv(input_channels, hidden_channels)
+        # Define the second GCN layer
+        self.conv2 = GATConv(hidden_channels, output_channels, heads = heads)
+
+    def forward(self, node_features, edge_index, edge_attributes, return_attention_weights = False):
+        """
+        Forward pass for the TimeStaticGCN model.
+
+        Inputs:
+          node_features (Tensor): Node features.
+          edge_index (Tensor): Edge indices.
+          edge_attributes (Tensor): Edge attributes.
+
+        Outputs:
+          output (Tensor): Output of the TimeStaticGCN model.
+        """
+        x = node_features  # (num_timepoints, num_nodes)
+        # Apply the first GCN layer with edge attributes
+        x = self.conv1(x, edge_index, edge_weight=edge_attributes)
+        x = F.relu(x)  # Apply ReLU activation
+
+        # Apply the second GCN layer with edge attributes
+        x, (edges, attnt_coeff) = self.conv2(x, edge_index, return_attention_weights = True)
+
+        # Apply global mean pooling
+        x = global_mean_pool(x, None)
+
+        if return_attention_weights:
+          return x, edges, attnt_coeff
+        else:
+          return x

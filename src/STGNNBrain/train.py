@@ -1,3 +1,21 @@
+from models import (MLP,
+                    SimpleLSTM,
+                    StaticGCN,
+                    CNNGCN,
+                    TemporalGCN,
+                    TemporalGAT,
+                    TimeStaticGCN,
+                    TimeStaticGCNGAT)
+
+from data import (load_connectivity_data, 
+                  load_timeseries_data, 
+                  load_labels,
+                  ConnectomeDataset, 
+                  ConnectomeDataset_TimeNodes)
+
+from fitting import train, evaluate
+
+from config import Config
 import os
 import random
 
@@ -7,7 +25,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models import STGCN, STChebNet, STGAT, STSGConv, MLP
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score
@@ -23,176 +40,24 @@ torch.cuda.manual_seed(seed)
 torch.cuda.manual_seed_all(seed)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-# torch.backends.cudnn.deterministic = True
-# torch.backends.cudnn.benchmark = False
 
-def load_connectivity_data(subjects, path):
-    conn_matrices = {}
-    for subj_id in subjects:
-      file_name = f'{subj_id}.txt'
-      if os.path.exists(os.path.join(path, file_name)):
-        matrix = np.loadtxt(os.path.join(path, file_name), dtype='str', delimiter=',')[1:, 1:]
-        matrix = matrix.astype(np.float32)
-        conn_matrices[subj_id] = torch.FloatTensor(matrix)
-      else:
-        raise ValueError(f"Missing connectivity data for subject {subj_id}")
+############ SET UP PARAMETERS ############
+num_nodes = 116
+num_timepoints = 518
+num_timepoints_graph2 = 100
+hidden_channels = 64
+hidden_channels_time = 32
+out_channels = 2  # binary classification
+window_size = 16
+stride = 2
+dilation = 2
+heads = 3
 
-    return conn_matrices
-
-# Load corresponding timeseries (node features)
-def load_timeseries_data(subjects, path):
-    timeseries_matrices = {}
-
-    for subj_id in subjects:
-        file_name = f'{subj_id}.txt'
-        if os.path.exists(os.path.join(path, file_name)):
-            matrix = np.loadtxt(os.path.join(path, file_name), dtype='str', delimiter=',')[1:, 1:]
-            matrix = matrix.astype(np.float32)
-            timeseries_matrices[subj_id] = torch.FloatTensor(matrix)
-        else:
-            raise ValueError(f"Missing timeseries data for subject {subj_id}")
-    return timeseries_matrices
-
-def load_labels(path):
-    labels = {}
-
-    labels_df = pd.read_csv(path)
-    for i, row in labels_df.iterrows():
-        subject_id = row['subcode']
-        label = row['caffeinated']
-        labels[subject_id] = label
-
-    return labels
-
-# Define data loader as ConnectomeDataset
-class ConnectomeDataset(Dataset):
-  def __init__(self, connectivity_matrices, timeseries_matrices, labels, corr_threshold = 0.1):
-      super().__init__()
-      self.connectivity_matrices = connectivity_matrices
-      self.timeseries_matrices = timeseries_matrices
-      self.subjects = list(labels.keys())
-      self.labels = labels
-      self.corr_threshold = corr_threshold 
-
-      self.subjects.sort()
-
-  def len(self):
-      return len(self.subjects)
-
-  def get(self, idx):
-      subject_id = self.subjects[idx]
-      s_id = int(subject_id.split('sub')[1].split('.')[0])
-      # Convert adjacency matrix to edge_index and edge_attr
-      adj_matrix = torch.abs(self.connectivity_matrices[subject_id])
-      edge_index = (adj_matrix > self.corr_threshold).nonzero().t()
-      edge_attr = adj_matrix[edge_index[0], edge_index[1]].unsqueeze(1)
-
-      # Node features from timeseries
-      x = self.timeseries_matrices[subject_id]
-      y = self.labels[subject_id]
-      
-      # Create PyG Data object
-      data = Data(x=x,
-                  edge_index=edge_index,
-                  edge_attr=edge_attr,
-                  y=y,
-                  s_id=torch.LongTensor([s_id])
-                  )
-
-      return data
-  
-def train(model_name, model, train_loader, criterion, optimizer, num_epochs=100, min_delta = 0.001, patience = 10):
-    best_train_loss = float('inf')
-    patience_counter = 0
-
-    for epoch in range(num_epochs):
-        model.train()
-        train_losses = []
-        
-        for batch in train_loader:
-            optimizer.zero_grad()
-            # Move batch to the device
-            batch = batch.to(device)
-            
-            # Forward pass
-            if model_name == 'Baseline LSTM':
-              output = model(batch.x)
-            else:
-              output = model(batch.x, batch.edge_index, batch.edge_attr)
-
-            # Compute loss
-            loss = criterion(output, batch.y)
-            loss.backward()
-            optimizer.step()
-            train_losses.append(loss.item())
-
-        avg_train_loss = np.mean(train_losses)
-
-        # Early stopping check
-        if avg_train_loss < best_train_loss - min_delta:
-            best_train_loss = avg_train_loss
-            patience_counter = 0
-        else:
-            patience_counter += 1
-            if patience_counter >= patience:
-                print('Early stopping...')
-                break
-
-        print(f'Epoch {epoch + 1}/{num_epochs}, Training Loss: {round(avg_train_loss, 3)}')
-
-    return avg_train_loss
-
-def evaluate(model_name, model, val_loader, criterion):
-    # Switch model to evaluation mode
-    model.eval()
-
-    # Placeholders for metrics
-    all_true_labels = []
-    all_pred_probs = []
-    all_pred_labels = []
-    val_losses = []
-
-    with torch.no_grad():
-        for batch in val_loader:
-            batch = batch.to(device)
-
-            # Forward pass
-            if model_name == 'Baseline LSTM':
-              output = model(batch.x)
-            else:
-              output = model(batch.x, batch.edge_index, batch.edge_attr)
-
-            val_loss = criterion(output, batch.y)
-            val_losses.append(val_loss.item())
-
-            # Predictions
-            val_pred_probs = F.softmax(output, dim=1)
-            val_pred_labels = torch.argmax(val_pred_probs, dim=1)
-
-            # Collect outputs
-            all_true_labels.append(batch.y.cpu().numpy())
-            all_pred_probs.append(val_pred_probs.cpu().numpy())
-            all_pred_labels.append(val_pred_labels.cpu().numpy())
-
-    # Aggregate results
-    all_true_labels = np.concatenate(all_true_labels, axis=0)
-    all_pred_probs = np.concatenate(all_pred_probs, axis=0)
-    all_pred_labels = np.concatenate(all_pred_labels, axis=0)
-
-    # Compute metrics
-    metrics = calculate_metrics(all_true_labels, all_pred_labels, all_pred_probs)
-    avg_val_loss = np.mean(val_losses)
-
-    return avg_val_loss, metrics
-
-def calculate_metrics(y_true, y_pred, y_prob):
-        return {
-            'accuracy': accuracy_score(y_true, y_pred),
-            'precision': precision_score(y_true, y_pred),
-            'recall': recall_score(y_true, y_pred),
-            'f1': f1_score(y_true, y_pred),
-            'auc': roc_auc_score(y_true, y_prob[:, 1])
-        }
+# Set up parameters for training
+patience = 15
+min_delta = 0.001
+n_splits = 5
+num_epochs = 100
 
 def main():
     # Create folders
@@ -200,8 +65,10 @@ def main():
     os.makedirs('./output/splits', exist_ok=True)
     os.makedirs('./output/results', exist_ok=True)
 
-    # Data paths
-    data_pth = '/content/drive/MyDrive/CS224W Project/data'
+    ########## LOAD DATA AND GRAPHS ##########
+    config = Config()
+    user_ID = config.current_user_ID
+    data_pth = config.data_pth[user_ID]
 
     # Load labels
     labels = load_labels(os.path.join(data_pth, 'labels.csv'))
@@ -219,102 +86,117 @@ def main():
     timeseries_matrices = load_timeseries_data(subject_ids, os.path.join(data_pth, 'timeseries_aa116'))
     print(f'Number of timeseries matrices: {len(timeseries_matrices)}')
 
-    # Initialize dataset
+    # Initialize datasets
     dataset = ConnectomeDataset(connectivity_matrices, timeseries_matrices, labels)
+    dataset_time = ConnectomeDataset_TimeNodes(timeseries_matrices, labels, timepoints = 100)
     
-    # Initialize dataset
-    dataset = ConnectomeDataset(connectivity_matrices, timeseries_matrices, labels)
-
-    # Initialize models
-    num_nodes = connectivity_matrices[subject_ids[0]].shape[1]
-    num_timepoints = timeseries_matrices[subject_ids[0]].shape[0]
-    hidden_channels = 64
-    hidden_channels_time = 8
-    out_channels = 2  # binary classification
-    window_size = 16
-    stride = 3
-    
-    models = {
-        # 'GCNCNN': GCNCNN(num_nodes, hidden_channels, out_channels, num_timepoints = num_timepoints, window_size=window_size, stride = stride),
-        # 'StaticGCN' : StaticGCN(hidden_channels, hidden_channels, out_channels, num_nodes = num_nodes)
-        # 'LSTM': SimpleTimeSeriesLSTM(num_nodes, hidden_channels, out_channels),
-        # 'MLP': MLP(num_nodes, [hidden_channels], out_channels),
-        # 'STGCN': STGCN(hidden_channels_time, out_channels),
+   ########## DEFINE MODELS TO TEST ##########
+    models_roi_graph = {
+        'MLP': MLP(num_nodes, [hidden_channels], out_channels),
+        'LSTM': SimpleLSTM(num_nodes, hidden_channels, out_channels),
+        'StaticGCN' : StaticGCN(hidden_channels, hidden_channels, out_channels, num_nodes = num_nodes),
+        'CNNGCN': CNNGCN(hidden_channels, out_channels, num_timepoints = num_timepoints, window_size=window_size, stride = stride, dilation = dilation, less_layers = False),
+        'CNNGCN_lessLayers': CNNGCN(hidden_channels, out_channels, num_timepoints = num_timepoints, window_size=window_size, stride = stride, dilation = dilation, less_layers = True),
+        'LSTMGCN': TemporalGCN(hidden_channels_time, out_channels, less_layers = False, temporal_layer = 'LSTM'),
+        'LSTMGCN_lessLayers': TemporalGCN(hidden_channels_time, out_channels, less_layers = True, temporal_layer = 'LSTM'),
+        'RNNGCN' : TemporalGCN(hidden_channels_time, out_channels, less_layers = False, temporal_layer = 'RNN'),
+        'RNNGCN_lessLayers' : TemporalGCN(hidden_channels_time, out_channels, less_layers = True, temporal_layer = 'RNN'),
+        'LSTMGAT' : TemporalGAT(hidden_channels_time, out_channels, heads = heads, less_layers = False, temporal_layer = 'LSTM'),
+        'LSTMGAT_lessLayers' : TemporalGAT(hidden_channels_time, out_channels, heads = heads, less_layers = True, temporal_layer = 'LSTM'),
+        'RNNGAT' : TemporalGAT(hidden_channels_time, out_channels, heads = heads, less_layers = False, temporal_layer = 'RNN'),
+        'RNNGAT_lessLayers' : TemporalGAT(hidden_channels_time, out_channels, heads = heads, less_layers = True, temporal_layer = 'RNN')
     }
 
-    # Create dictionary to store results
-    results = {model_name: {'accuracy' : [], 'precision' : [], 'recall' : [], 'f1' : [], 'auc' : []} for model_name in models.keys()}
-
-    # Define early stopping parameters
-    patience = 10
-    min_delta = 0.001
-    n_splits = 5
-    num_epochs = 100
+    models_time_graph = {
+        'MLPTime': MLP(num_timepoints_graph2, [hidden_channels], out_channels),
+        'TimeStaticGCNGAT' : TimeStaticGCNGAT(num_nodes, hidden_channels, out_channels, heads = heads),
+        'TimeStaticGCN' : TimeStaticGCN(num_nodes, hidden_channels, out_channels),
+    }
 
     skf = StratifiedKFold(n_splits = n_splits, shuffle = True, random_state = seed)
 
-    # K-fold cross validation loop
-    for model_name, model in models.items():
-        print(f'Training {model_name}...')
+    ############## TRAINING AND SAVING RESULTS ##############
+    for model_group, graph_type in zip([models_roi_graph, models_time_graph], [dataset, dataset_time]):
+        for model_name, model in model_group.items():
+            print(f'Training {model_name}...')
 
-        # Create a DataFrame to store train/test split information
-        split_data = []
-        results = []
-        for fold, (train_idx, val_idx) in enumerate(skf.split(dataset, [data.y for data in dataset])):
-            print(f'Fold {fold + 1}/{n_splits}')
+            # Create a DataFrame to store train/test split information
+            split_data = []
+            results = []
+            for fold, (train_idx, val_idx) in enumerate(skf.split(graph_type, [data.y for data in graph_type])):
+                print(f'Fold {fold + 1}/{n_splits}')
 
-            # Add fold information to the split_data list
-            for idx in train_idx:
-                split_data.append({'user_indx': idx, 'fold': fold + 1, 'split': 'train'})
-            for idx in val_idx:
-                split_data.append({'user_indx': idx, 'fold': fold + 1, 'split': 'test'})
+                # Add fold information to the split_data list
+                for idx in train_idx:
+                    split_data.append({'user_indx': idx, 'fold': fold + 1, 'split': 'train'})
+                for idx in val_idx:
+                    split_data.append({'user_indx': idx, 'fold': fold + 1, 'split': 'test'})
 
-            # Split data
-            train_loader = torch_geometric.loader.DataLoader(dataset[train_idx], batch_size=1, shuffle=True)
-            val_loader = torch_geometric.loader.DataLoader(dataset[val_idx], batch_size=1, shuffle=False)
+                # Split data
+                train_loader = torch_geometric.loader.DataLoader(graph_type[train_idx], batch_size=1, shuffle=True)
+                val_loader = torch_geometric.loader.DataLoader(graph_type[val_idx], batch_size=1, shuffle=False)
 
-            # Reset model for each fold
-            if model_name == 'MLP':
-                model = models[model_name].__class__(num_nodes, [hidden_channels], out_channels)
-            elif model_name == 'LSTM': 
-                model = models[model_name].__class__(num_nodes, hidden_channels, out_channels)
-            elif model_name == 'STGCN':
-                model = models[model_name].__class__(hidden_channels_time, out_channels)
-            elif model_name == 'GCNCNN':
-                model = models[model_name].__class__(num_nodes, hidden_channels, out_channels, num_timepoints = num_timepoints, window_size=window_size, stride = stride)
-            elif model_name == 'StaticGCN':
-                model = models[model_name].__class__(hidden_channels, hidden_channels, out_channels, num_nodes = num_nodes)
-            else:
-                model = models[model_name].__class__(num_nodes, hidden_channels, out_channels)
-            
-            optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-            criterion = nn.CrossEntropyLoss()
+                less_layers = len(model_name.split("_")) == 2
+                if less_layers:
+                    model_name_ = model_name.split("_")[0]
+                else:
+                    model_name_ = model_name
+                print(model_name, f"Less Layers = {less_layers}")
+                # Reset model for each fold
+                if model_name_ == 'MLP':
+                    model = models_roi_graph[model_name].__class__(num_nodes, [hidden_channels], out_channels)
+                elif model_name_ == 'LSTM':
+                    model = models_roi_graph[model_name].__class__(num_nodes, hidden_channels, out_channels)
+                elif model_name_ == 'StaticGCN':
+                    model = models_roi_graph[model_name].__class__(hidden_channels, hidden_channels, out_channels, num_nodes = num_nodes)
+                elif model_name_ == 'CNNGCN':
+                    model = models_roi_graph[model_name].__class__(hidden_channels, out_channels, num_timepoints = num_timepoints, window_size=window_size, stride = stride, dilation = dilation, less_layers = less_layers)
+                elif model_name_ == 'RNNGCN' or model_name == 'LSTMGCN':
+                    temporal_layer = 'RNN' if model_name_ == 'RNNGCN' else 'LSTM'
+                    model = models_roi_graph[model_name].__class__(hidden_channels_time, out_channels, less_layers = less_layers, temporal_layer = temporal_layer)
+                elif model_name_ == 'RNNGAT' or model_name == 'LSTMGAT':
+                    temporal_layer = 'RNN' if model_name_ == 'RNNGAT' else 'LSTM'
+                    model = models_roi_graph[model_name].__class__(hidden_channels_time, out_channels, heads = heads, less_layers = less_layers, temporal_layer = temporal_layer)
+                elif model_name_ == 'TimeStaticGCNGAT':
+                    model = models_time_graph[model_name].__class__(num_nodes, hidden_channels, out_channels, heads = heads)
+                elif model_name_ == 'TimeStaticGCN':
+                    model = models_time_graph[model_name].__class__(num_nodes, hidden_channels, out_channels)
+                elif model_name_ == 'MLPTime':
+                    model = models_time_graph[model_name].__class__(num_timepoints_graph2, [hidden_channels], out_channels)
+                else:
+                    print("MODEL NOT INCLUDED IN THE TRAINING")
 
-            # Train model
-            train_loss = train(model_name, model, train_loader, criterion, optimizer, 
-                            num_epochs=num_epochs, min_delta = min_delta, patience = patience)
+                if torch.cuda.is_available():
+                    model.cuda()
 
-            # Evaluate model
-            val_loss, metrics = evaluate(model_name, model, val_loader, criterion)
-            for metric_name, values in metrics.items():
-                results.append({'metric_name' : metric_name, 'fold' : fold + 1, 'value' : np.mean(values)})
+                optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+                criterion = nn.CrossEntropyLoss()
 
-            print(f'Training Loss: {round(train_loss, 3)} | Validation Loss: {round(val_loss, 3)}')
-            for metric_name, values in metrics.items():
-                print(f'{metric_name}: {np.mean(values)}')
+                # Train model
+                train_loss = train(model, train_loader, criterion, optimizer, device,
+                                num_epochs=num_epochs, min_delta = min_delta, patience = patience)
 
-            # Save the model
-            torch.save(model.state_dict(), f'./output/model/{model_name}_fold{fold + 1}.pth')
+                # Evaluate model
+                val_loss, metrics = evaluate(model_name, model, val_loader, criterion, device)
+                for metric_name, values in metrics.items():
+                    results.append({'metric_name' : metric_name, 'fold' : fold + 1, 'value' : np.mean(values)})
 
-        # Save train/test split data to CSV
-        split_df = pd.DataFrame(split_data)
-        split_df.to_csv(f'./output/splits/{model_name}_splits.csv', index=False)
-        print(f'Saved train/test split for {model_name} to CSV.')
+                print(f'Training Loss: {round(train_loss, 3)} | Validation Loss: {round(val_loss, 3)}')
+                for metric_name, values in metrics.items():
+                    print(f'{metric_name}: {np.mean(values)}')
 
-        # Save results to CSV
-        results_df = pd.DataFrame(results)
-        results_df.to_csv(f'./output/results/{model_name}_results.csv', index=False)
-        print(f'Saved results for {model_name} to CSV.')
+                # Save the model
+                torch.save(model.state_dict(), f'./output/model/{model_name}_fold{fold + 1}.pth')
+
+            # Save train/test split data to CSV
+            split_df = pd.DataFrame(split_data)
+            split_df.to_csv(f'./output/splits/{model_name}_splits.csv', index=False)
+            print(f'Saved train/test split for {model_name} to CSV.')
+
+            # Save results to CSV
+            results_df = pd.DataFrame(results)
+            results_df.to_csv(f'./output/results/{model_name}_results.csv', index=False)
+            print(f'Saved results for {model_name} to CSV.')
 
 if __name__ == '__main__':
     main()
