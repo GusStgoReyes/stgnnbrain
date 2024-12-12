@@ -13,7 +13,7 @@ We define two types of graphs: (1) The brain ROIs are the nodes and (2) The time
 ![Overview of the model architectures](figures/model_architecture.png)
 
 ### How to setup?
-We recommend copying the `colab.ipynb` file into Google Colab to run this project, since that is what was used to test the model. However, we provide a comprehensive guide in this repository. 
+We recommend copying the `noebooks/colab.ipynb` file into Google Colab to run this project, since that is what was used to test the model. However, we provide a comprehensive guide in this repository. 
 
 ## Walkthrough of code
 
@@ -28,12 +28,12 @@ Once done, write the paths to each folder in the `config.json` file two. Now you
 5. Save the timeseries and connectivity matrices into a folder (specified in the `config.json` file). 
 
 ### Creating the graphs
-The graphs necessary for training the models are generated in the  `data.py` script. This file simply loads the labels, timeseries and connectivity matrices. Then, it defines two types of graphs:
+The graphs necessary for training the models are generated in the  `src/STGNNBrain/data.py` script. This file simply loads the labels, timeseries and connectivity matrices. Then, it defines two types of graphs:
 1. **Graph 1:** Brain ROIs are the nodes, and each node has the time series as their feature. There is an edge between two brain ROIs if their absolute value correlation is > 0.1. Furthermore, each edge is weighted by the absolute value of the correlation coefficient. 
 2. **Graph 2:** Time points are the nodes, and each node has the activity of the brain ROIs as their feature. The correlation between each time point is computed and there is an edge between two time points if the absolute value correlation is > 0.1. Furthermore, each edge is weighted by the absolute value of the correlation coefficient. 
 
 ### Defining the models
-The model definitions are in the `models.py` script. We include:
+The model definitions are in the `src/STGNNBrain/models.py` script. We include:
 1. **Baseline models for Graph 1**: 
     a. MLP on the connectivity matrices
     b. LSTM (temporal information only)
@@ -53,7 +53,7 @@ The model definitions are in the `models.py` script. We include:
     b. ReLU -> GCNConv -> ReLU -> GATConv -> Global Mean Pool -> Linear layer
 
 ### Training and Evaluation
-The training and evaluation is done in `fitting.py` script, leveraging helper functions written in `train.py` script. In particular, we do the following:
+The training and evaluation is done in `src/STGNNBrain/fitting.py` script, leveraging helper functions written in `src/STGNNBrain/train.py` script. In particular, we do the following:
 1. Split the data into 5 folds. 
 2. For each fold:
     a. Train the model for 300 epochs or until convergence (i.e., loss does not decrease significantly after 15 epochs in a row). 
@@ -64,4 +64,4 @@ The training and evaluation is done in `fitting.py` script, leveraging helper fu
 ### Explain the results of the best model
 Once we corroborate which is the best model, we design an explainer (using GNNExplainer) to determine the importance of the nodes or features to make the prediction. This is done by maximizing the mutual information between the prediction of the model and the distribution of possible subgraph structures. 
 
-The code for the best model is written in `explainer.py` script. 
+The code for the best model is written in `src/STGNNBrain/explainer.py` script. 
