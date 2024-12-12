@@ -2,6 +2,8 @@
 ### Predicting Brain-State Using Spatio-Temporal GNNs
 We use the MyConnectome dataset, composed of thirty-two 10-minute fMRI scans while a participant was caffeinated and fourty 10-minute fMRI scans while the same participant was fasted. Our task is to leverage Spatiotemporal patterns of brain activity using Graph Neural Networks to classify the state of the participant. 
 
+Please refer to this blog post for a more detailed background and explanation. 
+
 ### Graph definition
 We define two types of graphs: (1) The brain ROIs are the nodes and (2) The time points are the nodes. 
 ![Overview of the graphs created](figures/graphs.png)
@@ -11,7 +13,7 @@ We define two types of graphs: (1) The brain ROIs are the nodes and (2) The time
 ![Overview of the model architectures](figures/model_architecture.png)
 
 ### How to setup?
-We recommend copying the `walkthrough.ipynb` file into google colab to run this project, since that is what was used to test the model. However, we provide a comprehensive guide in this repository. 
+We recommend copying the `colab.ipynb` file into Google Colab to run this project, since that is what was used to test the model. However, we provide a comprehensive guide in this repository. 
 
 ## Walkthrough of code
 
