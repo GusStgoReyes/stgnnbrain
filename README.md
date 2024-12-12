@@ -1,12 +1,18 @@
 # STGNNBrain: Spatial-Temporal GNN for Brain data
-### Predicting one person's brain state while caffeinated vs non-caffeinated
+### Predicting Brain-State Using Spatio-Temporal GNNs
+We use the MyConnectome dataset, composed of thirty-two 10-minute fMRI scans while a participant was caffeinated and fourty 10-minute fMRI scans while the same participant was fasted. Our task is to leverage Spatiotemporal patterns of brain activity using Graph Neural Networks to classify the state of the participant. 
 
-#### Exploring the notebook
-1. Refer to `src/STGNNBrain/example_load_run_model.ipynb` for a walkthrough on the creation of the spatio-temporal dataset and running an example model. 
+#### Graph definition
+We define two types of graphs: (1) The brain ROIs are the nodes and (2) The time points are the nodes. 
+![Overview of the graphs created](figures/graphs.png)
 
-2. Refer to `src/STGNNBrain/models.py` and `src/STGNNBrain/train.py` to see some baseline spatial-temporal models and the code to train them. Currently under development. 
+#### Architectures explored
+
+![Overview of the model architectures](figures/model_architecture.png)
 
 ### How to setup?
+
+Not working currently....
 We are using `uv` as version control. To setup the environment, run:
 
 ```bash
