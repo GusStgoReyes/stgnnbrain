@@ -1,6 +1,11 @@
 {
-    "data_pth" : {"gustavo_local" : "/Users/gustxsr/Documents/Stanford/PoldrackLab/GNN_project/STGNNBrain/data",
-                  "favour_local" : "None"},
+    "data_pth" : {"gustavo_local" : "/Users/gustxsr/Documents/Stanford/PoldrackLab/GNN_project/STGNNBrain/data"},
+    "atlas_pth" : {"gustavo_tacc" : "/scratch/99999/gustxsr/aa116_atlas/aal116MNI.nii.gz"},
+    "fmri_pth" : {"gustavo_tacc" : "/scratch/99999/gustxsr/myconnectome_rest"},
+    "confounds_pth" : {"gustavo_tacc" : "/scratch/99999/gustxsr/myconnectome_subsetted_confounds"},
+    "save_timeseries" : {"gustavo_tacc" : "/scratch/99999/gustxsr/gnn_cs224w/timeseries"},
+    "save_connectivity" : {"gustavo_tacc" : "/scratch/99999/gustxsr/gnn_cs224w/connectivity"},
+
     "current_user_ID" : "gustavo_local"
 
 }

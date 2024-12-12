@@ -14,22 +14,15 @@ from data import (load_connectivity_data,
                   ConnectomeDataset_TimeNodes)
 
 from fitting import train, evaluate
-
 from config import Config
 import os
 import random
-
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
 from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score
 import torch_geometric
-from torch_geometric.data import Data, Dataset
 
 seed = 42
 os.environ["PYTHONHASHSEED"] = str(seed)
@@ -169,6 +162,7 @@ def main():
                 if torch.cuda.is_available():
                     model.cuda()
 
+                # Use the CrossEntropyLoss loss function and Adam Optimizer
                 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
                 criterion = nn.CrossEntropyLoss()
 

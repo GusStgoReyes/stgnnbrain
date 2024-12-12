@@ -13,7 +13,6 @@ def calculate_metrics(y_true, y_pred, y_prob):
         'auc': roc_auc_score(y_true, y_prob[:, 1])
     }
 
-
 def train(model, train_loader, criterion, optimizer, device, num_epochs=100, min_delta = 0.001, patience = 10):
     best_train_loss = float('inf')
     patience_counter = 0
