@@ -34,34 +34,42 @@ The graphs necessary for training the models are generated in the  `src/STGNNBra
 
 ### Defining the models
 The model definitions are in the `src/STGNNBrain/models.py` script. We include:
-1. **Baseline models for Graph 1**: 
-    a. MLP on the connectivity matrices
-    b. LSTM (temporal information only)
-    c. GCN (spatial information only)
-2. **Baseline models for Graph 2**: 
-    a. MLP on the connectivity matrices
-3. **Spatiotemporal models for Graph 1**:
-    a. Each model first includes a temporal layer to create new features for each brain ROI based on their time series:
-        1. CNN: Two 1D Convolution on the time series
-        2. RNN: The output of the last hidden state for each brain ROI. 
-        3. LSTM: The output of the last hidden state for each brain ROI. 
-    b. Then, the output is passed through spatial layers. Since we have a small dataset, we included code to decrease the complexity of the model by one layer so that we do not overfit. However, we only report on the more complex models. 
-        1. More complex: ReLU -> GCNConv -> ReLU -> GCNConv -> Global Mean Pool -> Linear layer | Less complex: ReLU -> GCNConv -> Global Mean Pool -> Linear layer
-        2. More complex: ReLU -> GCNConv -> ReLU -> GATConv -> Global Mean Pool -> Linear layer | Less complex: ReLU -> GATConv -> Global Mean Pool -> Linear layer
-4. **Spatial models for Graph 2:**
-    a. ReLU -> GCNConv -> ReLU -> GCNConv -> Global Mean Pool -> Linear layer
-    b. ReLU -> GCNConv -> ReLU -> GATConv -> Global Mean Pool -> Linear layer
+- **Baseline models for Graph 1**: 
+    - MLP on the connectivity matrices
+    - LSTM (temporal information only)
+    - GCN (spatial information only)
+- **Baseline models for Graph 2**: 
+    - MLP on the connectivity matrices
+- **Spatiotemporal models for Graph 1**:
+    - Each model first includes a temporal layer to create new features for each brain ROI based on their time series:
+        - CNN: Two 1D Convolution on the time series
+        - RNN: The output of the last hidden state for each brain ROI. 
+        - LSTM: The output of the last hidden state for each brain ROI. 
+    - Then, the output is passed through spatial layers. Since we have a small dataset, we included code to decrease the complexity of the model by one layer so that we do not overfit. However, we only report on the more complex models. 
+        - More complex: ReLU -> GCNConv -> ReLU -> GCNConv -> Global Mean Pool -> Linear layer | Less complex: ReLU -> GCNConv -> Global Mean Pool -> Linear layer
+        - More complex: ReLU -> GCNConv -> ReLU -> GATConv -> Global Mean Pool -> Linear layer | Less complex: ReLU -> GATConv -> Global Mean Pool -> Linear layer
+- **Spatial models for Graph 2:**
+    - ReLU -> GCNConv -> ReLU -> GCNConv -> Global Mean Pool -> Linear layer
+    - ReLU -> GCNConv -> ReLU -> GATConv -> Global Mean Pool -> Linear layer
 
 ### Training and Evaluation
 The training and evaluation is done in `src/STGNNBrain/fitting.py` script, leveraging helper functions written in `src/STGNNBrain/train.py` script. In particular, we do the following:
-1. Split the data into 5 folds. 
-2. For each fold:
-    a. Train the model for 300 epochs or until convergence (i.e., loss does not decrease significantly after 15 epochs in a row). 
-        I. CrossEntropyLoss as the loss function
-        II. Adam Optimizer
-    b. Test the model on the held out data and save all metrics (accuracy, f1, recall, precision, AUC). 
+- Split the data into 5 folds. 
+- For each fold:
+    - Train the model for 300 epochs or until convergence (i.e., loss does not decrease significantly after 15 epochs in a row). 
+        - CrossEntropyLoss as the loss function
+        - Adam Optimizer
+    - Test the model on the held out data and save all metrics (accuracy, f1, recall, precision, AUC). 
 
 ### Explain the results of the best model
 Once we corroborate which is the best model, we design an explainer (using GNNExplainer) to determine the importance of the nodes or features to make the prediction. This is done by maximizing the mutual information between the prediction of the model and the distribution of possible subgraph structures. 
 
 The code for the best model is written in `src/STGNNBrain/explainer.py` script. 
+
+
+## Future work:
+1. If possible, create more samples from the data while avoiding contamination between training and testing set. 
+    - This might increase the performance difference between out Graph 1 models and baselines. 
+2. Hyperparameter tuning
+3. In Graph 2, make the features of each time point be its own spatial graph. 
+
